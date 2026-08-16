@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import time
+import faiss
 
 
 # ============================================================
@@ -21,9 +22,24 @@ st.set_page_config(
 # ============================================================
 
 animes = pd.read_csv("anime.csv")
-similarity = np.load("similarity.npy")
+
+# Load FAISS index instead of similarity.npy
+index = faiss.read_index("anime.index")
 
 animes["title"] = animes["title"].astype(str)
+
+
+# ============================================================
+# CHECK DATA AND INDEX
+# ============================================================
+
+if index.ntotal != len(animes):
+    st.error(
+        f"Anime data and FAISS index do not match. "
+        f"anime.csv has {len(animes)} rows, "
+        f"but anime.index has {index.ntotal} vectors."
+    )
+    st.stop()
 
 
 # ============================================================
@@ -111,27 +127,60 @@ def get_image_url(title):
 
 def recommend(anime, top_n=10):
 
-    anime_index = animes[
+    # Find the anime's row/index in anime.csv
+    matching_rows = animes.index[
         animes["title"] == anime
-    ].index[0]
+    ]
 
-    distances = similarity[anime_index]
+    if len(matching_rows) == 0:
+        return []
 
-    anime_list = sorted(
-        list(enumerate(distances)),
-        reverse=True,
-        key=lambda x: x[1]
-    )[1:top_n + 1]
+    anime_index = matching_rows[0]
+
+    # --------------------------------------------------------
+    # Get the vector of the selected anime
+    # --------------------------------------------------------
+    #
+    # Our FAISS index was created using IndexFlatL2,
+    # so we can reconstruct the original vector.
+    #
+
+    query_vector = index.reconstruct(anime_index)
+
+    query_vector = np.asarray(
+        query_vector,
+        dtype=np.float32
+    ).reshape(1, -1)
+
+    # --------------------------------------------------------
+    # Search for similar anime
+    # --------------------------------------------------------
+
+    distances, indices = index.search(
+        query_vector,
+        top_n + 1
+    )
 
     recommendations = []
 
-    for i in anime_list:
+    for i in indices[0]:
 
-        anime_data = animes.iloc[i[0]]
+        # Skip the selected anime itself
+        if i == anime_index:
+            continue
+
+        # Safety check
+        if i < 0 or i >= len(animes):
+            continue
+
+        anime_data = animes.iloc[i]
 
         recommendations.append({
             "title": anime_data["title"]
         })
+
+        if len(recommendations) == top_n:
+            break
 
     return recommendations
 
@@ -155,595 +204,284 @@ if st.session_state.selected_anime:
 
 st.markdown(
     f"""
-<style>
+    <style>
 
-/* ============================================================
-   MAIN APP BACKGROUND
-   ============================================================ */
+    /* ================================
+       MAIN BACKGROUND
+       ================================ */
 
-.stApp {{
+    .stApp {{
+        background:
+            linear-gradient(
+                rgba(10, 12, 18, 0.92),
+                rgba(10, 12, 18, 0.96)
+            ),
+            url("{background_url if background_url else ''}");
 
-    background-color: #08090f;
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+    }}
 
-    background-image:
-        linear-gradient(
-            rgba(5, 6, 12, 0.82),
-            rgba(5, 6, 12, 0.94)
-        )
-        {f', url("{background_url}")' if background_url else ''};
 
-    background-size: cover;
+    /* ================================
+       NAVBAR
+       ================================ */
 
-    background-position: center top;
+    .navbar {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
 
-    background-attachment: fixed;
+        padding: 20px 40px;
 
-    background-repeat: no-repeat;
-}}
+        margin-bottom: 40px;
 
+        background: rgba(20, 20, 30, 0.70);
 
-/* ============================================================
-   BACKGROUND EFFECT
-   ============================================================ */
+        border-radius: 15px;
 
-.stApp::before {{
+        backdrop-filter: blur(12px);
+    }}
 
-    content: "";
+    .logo {{
+        font-size: 28px;
+        font-weight: 800;
+        color: white;
+    }}
 
-    position: fixed;
+    .logo span {{
+        color: #ff4b91;
+    }}
 
-    top: 0;
-    left: 0;
+    .nav-text {{
+        color: #b8b8b8;
+        font-size: 15px;
+    }}
 
-    width: 100%;
-    height: 100%;
 
-    pointer-events: none;
+    /* ================================
+       HERO
+       ================================ */
 
-    z-index: -1;
+    .hero {{
+        text-align: center;
 
-    background:
-        radial-gradient(
-            circle at 20% 20%,
-            rgba(168, 85, 247, 0.18),
-            transparent 35%
-        ),
+        margin-top: 40px;
+        margin-bottom: 35px;
+    }}
 
-        radial-gradient(
-            circle at 80% 30%,
-            rgba(99, 102, 241, 0.12),
-            transparent 35%
-        );
-}}
+    .hero h1 {{
+        font-size: 55px;
+        font-weight: 800;
 
+        color: white;
 
-/* ============================================================
-   HIDE STREAMLIT DEFAULT ELEMENTS
-   ============================================================ */
+        margin-bottom: 10px;
+    }}
 
-#MainMenu {{
-    visibility: hidden;
-}}
+    .hero p {{
+        font-size: 18px;
+        color: #b8b8b8;
+    }}
 
-footer {{
-    visibility: hidden;
-}}
 
-header {{
-    background: transparent !important;
-}}
+    /* ================================
+       SELECTED ANIME
+       ================================ */
 
+    .selected-box {{
+        background: rgba(25, 25, 35, 0.80);
 
-/* ============================================================
-   NAVBAR
-   ============================================================ */
+        border: 1px solid rgba(255, 255, 255, 0.10);
 
-.navbar {{
+        border-radius: 15px;
 
-    display: flex;
+        padding: 20px;
 
-    justify-content: space-between;
+        margin-top: 25px;
+        margin-bottom: 25px;
 
-    align-items: center;
+        text-align: center;
 
-    padding: 20px 35px;
+        backdrop-filter: blur(10px);
+    }}
 
-    margin-bottom: 25px;
+    .selected-label {{
+        font-size: 12px;
 
-    background:
-        rgba(10, 10, 18, 0.62);
+        color: #ff4b91;
 
-    border-bottom:
-        1px solid
-        rgba(255, 255, 255, 0.10);
+        font-weight: 700;
 
-    border-radius:
-        0 0 20px 20px;
+        letter-spacing: 2px;
 
-    backdrop-filter:
-        blur(18px);
+        margin-bottom: 8px;
+    }}
 
-    -webkit-backdrop-filter:
-        blur(18px);
-}}
+    .selected-title {{
+        font-size: 24px;
 
+        color: white;
 
-.logo {{
+        font-weight: 700;
+    }}
 
-    font-size: 27px;
 
-    font-weight: 800;
+    /* ================================
+       RECOMMEND BUTTON
+       ================================ */
 
-    color: white;
-}}
+    .recommend-button {{
+        margin-top: 10px;
+        margin-bottom: 20px;
+    }}
 
 
-.logo span {{
+    /* ================================
+       RECOMMENDATION SECTION
+       ================================ */
 
-    color: #c084fc;
-}}
+    .section-title {{
+        font-size: 30px;
 
+        color: white;
 
-.nav-text {{
+        font-weight: 700;
 
-    color: #c4c4ce;
+        margin-top: 40px;
 
-    font-size: 14px;
-}}
+        margin-bottom: 25px;
+    }}
 
+    .section-title span {{
+        color: #ff4b91;
+    }}
 
-/* ============================================================
-   HERO
-   ============================================================ */
 
-.hero {{
+    /* ================================
+       ANIME CARD
+       ================================ */
 
-    text-align: center;
+    .anime-card {{
+        background: rgba(25, 25, 35, 0.85);
 
-    padding:
-        45px 20px 30px;
-}}
+        border-radius: 14px;
 
+        overflow: hidden;
 
-.hero h1 {{
+        margin-bottom: 25px;
 
-    font-size: 52px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
 
-    font-weight: 900;
+        transition: transform 0.3s ease;
+    }}
 
-    margin-bottom: 10px;
+    .anime-card:hover {{
+        transform: translateY(-7px);
+    }}
 
-    background:
-        linear-gradient(
-            90deg,
-            #ffffff,
-            #e9d5ff,
-            #c084fc
-        );
+    .anime-card img {{
+        width: 100%;
 
-    -webkit-background-clip:
-        text;
+        height: 300px;
 
-    -webkit-text-fill-color:
-        transparent;
+        object-fit: cover;
 
-    text-shadow:
-        0 5px 30px
-        rgba(0, 0, 0, 0.4);
-}}
+        display: block;
+    }}
 
+    .anime-info {{
+        padding: 14px;
+    }}
 
-.hero p {{
+    .anime-title {{
+        color: white;
 
-    color: #d0d0d8;
+        font-size: 15px;
 
-    font-size: 18px;
+        font-weight: 600;
 
-    text-shadow:
-        0 2px 10px
-        rgba(0, 0, 0, 0.7);
-}}
+        line-height: 1.4;
+    }}
 
+    .no-poster {{
+        height: 300px;
 
-/* ============================================================
-   SEARCH DROPDOWN
-   ============================================================ */
+        display: flex;
 
-div[data-testid="stSelectbox"] {{
+        align-items: center;
 
-    max-width: 700px;
+        justify-content: center;
 
-    margin:
-        0 auto;
-}}
+        color: #888;
 
+        background: rgba(30, 30, 40, 0.9);
+    }}
 
-div[data-testid="stSelectbox"] > div {{
 
-    background:
-        rgba(12, 12, 20, 0.72);
+    /* ================================
+       EMPTY STATE
+       ================================ */
 
-    border:
-        1px solid
-        rgba(255, 255, 255, 0.18);
+    .empty-state {{
+        text-align: center;
 
-    border-radius:
-        18px;
+        margin-top: 80px;
 
-    backdrop-filter:
-        blur(18px);
+        padding: 60px;
 
-    -webkit-backdrop-filter:
-        blur(18px);
+        background: rgba(25, 25, 35, 0.70);
 
-    box-shadow:
-        0 10px 35px
-        rgba(0, 0, 0, 0.30);
-}}
+        border-radius: 20px;
 
+        backdrop-filter: blur(10px);
+    }}
 
-/* ============================================================
-   SELECTED ANIME
-   ============================================================ */
+    .empty-icon {{
+        font-size: 60px;
 
-.selected-box {{
+        margin-bottom: 20px;
+    }}
 
-    max-width: 1000px;
+    .empty-text {{
+        color: #aaa;
 
-    margin:
-        30px auto;
+        font-size: 18px;
+    }}
 
-    padding:
-        22px 28px;
 
-    background:
-        rgba(10, 10, 18, 0.58);
+    /* ================================
+       FOOTER
+       ================================ */
 
-    border:
-        1px solid
-        rgba(192, 132, 252, 0.35);
+    .footer {{
+        text-align: center;
 
-    border-radius:
-        18px;
+        margin-top: 80px;
 
-    backdrop-filter:
-        blur(18px);
+        padding: 30px;
 
-    -webkit-backdrop-filter:
-        blur(18px);
+        color: #777;
 
-    box-shadow:
-        0 15px 45px
-        rgba(0, 0, 0, 0.30);
-}}
+        font-size: 14px;
+    }}
 
 
-.selected-label {{
+    /* ================================
+       STREAMLIT SELECTBOX
+       ================================ */
 
-    color:
-        #c4c4ce;
+    div[data-baseweb="select"] > div {{
+        background-color: rgba(25, 25, 35, 0.90);
 
-    font-size:
-        12px;
+        border-radius: 12px;
 
-    font-weight:
-        700;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+    }}
 
-    letter-spacing:
-        1.5px;
-}}
-
-
-.selected-title {{
-
-    color:
-        white;
-
-    font-size:
-        27px;
-
-    font-weight:
-        800;
-
-    margin-top:
-        5px;
-
-    text-shadow:
-        0 2px 12px
-        rgba(0, 0, 0, 0.7);
-}}
-
-
-/* ============================================================
-   BUTTONS
-   ============================================================ */
-
-div.stButton > button {{
-
-    border-radius:
-        12px;
-
-    border:
-        1px solid
-        rgba(255, 255, 255, 0.14);
-
-    background:
-        rgba(10, 10, 18, 0.65);
-
-    color:
-        white;
-
-    font-weight:
-        600;
-
-    transition:
-        all 0.2s ease;
-
-    backdrop-filter:
-        blur(12px);
-}}
-
-
-div.stButton > button:hover {{
-
-    background:
-        rgba(168, 85, 247, 0.25);
-
-    border-color:
-        rgba(192, 132, 252, 0.70);
-
-    color:
-        white;
-
-    transform:
-        translateY(-1px);
-}}
-
-
-/* ============================================================
-   RECOMMEND BUTTON
-   ============================================================ */
-
-.recommend-button div.stButton > button {{
-
-    background:
-        linear-gradient(
-            135deg,
-            #9333ea,
-            #c026d3
-        );
-
-    border:
-        none;
-
-    font-size:
-        16px;
-
-    font-weight:
-        700;
-
-    box-shadow:
-        0 8px 30px
-        rgba(147, 51, 234, 0.40);
-}}
-
-
-/* ============================================================
-   SECTION TITLE
-   ============================================================ */
-
-.section-title {{
-
-    font-size:
-        30px;
-
-    font-weight:
-        800;
-
-    margin-top:
-        45px;
-
-    margin-bottom:
-        25px;
-
-    color:
-        white;
-
-    text-shadow:
-        0 3px 15px
-        rgba(0, 0, 0, 0.7);
-}}
-
-
-.section-title span {{
-
-    color:
-        #c084fc;
-}}
-
-
-/* ============================================================
-   ANIME CARD
-   ============================================================ */
-
-.anime-card {{
-
-    background:
-        rgba(10, 10, 18, 0.70);
-
-    border:
-        1px solid
-        rgba(255, 255, 255, 0.10);
-
-    border-radius:
-        16px;
-
-    overflow:
-        hidden;
-
-    transition:
-        transform 0.25s ease,
-        box-shadow 0.25s ease,
-        border-color 0.25s ease;
-
-    margin-bottom:
-        20px;
-
-    backdrop-filter:
-        blur(12px);
-
-    -webkit-backdrop-filter:
-        blur(12px);
-}}
-
-
-.anime-card:hover {{
-
-    transform:
-        translateY(-7px);
-
-    border-color:
-        rgba(192, 132, 252, 0.60);
-
-    box-shadow:
-        0 20px 45px
-        rgba(0, 0, 0, 0.55);
-}}
-
-
-.anime-card img {{
-
-    width:
-        100%;
-
-    height:
-        300px;
-
-    object-fit:
-        cover;
-
-    display:
-        block;
-}}
-
-
-.anime-info {{
-
-    padding:
-        14px;
-
-    min-height:
-        65px;
-}}
-
-
-.anime-title {{
-
-    color:
-        #f4f4f5;
-
-    font-size:
-        14px;
-
-    font-weight:
-        700;
-
-    line-height:
-        1.35;
-}}
-
-
-/* ============================================================
-   NO POSTER
-   ============================================================ */
-
-.no-poster {{
-
-    height:
-        300px;
-
-    display:
-        flex;
-
-    align-items:
-        center;
-
-    justify-content:
-        center;
-
-    text-align:
-        center;
-
-    color:
-        #777780;
-
-    background:
-        #14151d;
-}}
-
-
-/* ============================================================
-   EMPTY STATE
-   ============================================================ */
-
-.empty-state {{
-
-    text-align:
-        center;
-
-    margin-top:
-        70px;
-
-    color:
-        #aaaab5;
-}}
-
-
-.empty-icon {{
-
-    font-size:
-        55px;
-}}
-
-
-.empty-text {{
-
-    font-size:
-        17px;
-
-    margin-top:
-        10px;
-
-    text-shadow:
-        0 2px 10px
-        rgba(0, 0, 0, 0.8);
-}}
-
-
-/* ============================================================
-   FOOTER
-   ============================================================ */
-
-.footer {{
-
-    text-align:
-        center;
-
-    margin-top:
-        80px;
-
-    padding:
-        30px;
-
-    color:
-        #888894;
-
-    font-size:
-        13px;
-}}
-
-</style>
-""",
+    </style>
+    """,
     unsafe_allow_html=True
 )
 
